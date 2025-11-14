@@ -1,9 +1,17 @@
 package com.example.telegram;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import org.junit.jupiter.api.io.TempDir;
 
 import org.junit.jupiter.api.Test;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
@@ -39,6 +47,8 @@ import org.telegram.telegrambots.meta.api.objects.reactions.ReactionTypeEmoji;
 class UpdatePrinterTest {
 
     private final UpdatePrinter printer = new UpdatePrinter();
+    @TempDir
+    Path tempDir;
 
     @Test
     void describeHandlesNullUpdates() {
@@ -74,6 +84,37 @@ class UpdatePrinterTest {
         for (String label : expectedLabels) {
             assertTrue(description.contains(label), () -> "Missing section " + label + "\n" + description);
         }
+    }
+
+    @Test
+    void formatFromStringSupportsAliases() {
+        assertEquals(UpdatePrinter.Format.TEXT, UpdatePrinter.Format.fromString("TEXT"));
+        assertEquals(UpdatePrinter.Format.JSON, UpdatePrinter.Format.fromString("json"));
+        assertEquals(UpdatePrinter.Format.JSON, UpdatePrinter.Format.fromString("NdJsOn"));
+        assertThrows(IllegalArgumentException.class, () -> UpdatePrinter.Format.fromString("xml"));
+    }
+
+    @Test
+    void printWritesJsonToStdoutAndFile() throws IOException {
+        Path logFile = tempDir.resolve("updates.ndjson");
+        UpdatePrinter jsonPrinter = new UpdatePrinter(UpdatePrinter.Format.JSON, logFile);
+        Update update = new Update();
+        update.setUpdateId(101);
+
+        ByteArrayOutputStream capture = new ByteArrayOutputStream();
+        PrintStream original = System.out;
+        System.setOut(new PrintStream(capture));
+        try {
+            jsonPrinter.print(update);
+        } finally {
+            System.setOut(original);
+        }
+
+        String stdout = capture.toString();
+        String fileContent = Files.readString(logFile);
+        assertTrue(stdout.startsWith("{"));
+        assertTrue(stdout.endsWith(System.lineSeparator()));
+        assertEquals(stdout, fileContent);
     }
 
     private static Update buildFullUpdate() {

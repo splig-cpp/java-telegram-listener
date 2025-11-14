@@ -1,5 +1,7 @@
 package com.example.telegram;
 
+import java.nio.file.Path;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 
 import org.telegram.telegrambots.meta.TelegramBotsApi;
@@ -18,7 +20,8 @@ public final class BotLauncher {
         String token = readConfig("TELEGRAM_BOT_TOKEN");
         String username = readConfig("TELEGRAM_BOT_USERNAME");
 
-        TelegramTriggerBot bot = new TelegramTriggerBot(token, username, new UpdatePrinter());
+        UpdatePrinter printer = buildPrinter();
+        TelegramTriggerBot bot = new TelegramTriggerBot(token, username, printer);
         TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
         botsApi.registerBot(bot);
 
@@ -27,6 +30,34 @@ public final class BotLauncher {
         CountDownLatch latch = new CountDownLatch(1);
         Runtime.getRuntime().addShutdownHook(new Thread(latch::countDown));
         latch.await();
+    }
+
+    private static UpdatePrinter buildPrinter() {
+        UpdatePrinter.Format format = parseFormat(readOptionalConfig("TELEGRAM_OUTPUT_FORMAT"));
+        Path logFile = readOptionalConfig("TELEGRAM_LOG_FILE")
+                .map(Path::of)
+                .orElse(null);
+        return new UpdatePrinter(format, logFile);
+    }
+
+    private static UpdatePrinter.Format parseFormat(Optional<String> rawFormat) {
+        if (rawFormat.isEmpty()) {
+            return UpdatePrinter.Format.TEXT;
+        }
+        try {
+            return UpdatePrinter.Format.fromString(rawFormat.get());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException(
+                    "Unsupported TELEGRAM_OUTPUT_FORMAT value: " + rawFormat.get(), ex);
+        }
+    }
+
+    private static Optional<String> readOptionalConfig(String key) {
+        String value = System.getenv(key);
+        if (value == null || value.isBlank()) {
+            value = System.getProperty(key);
+        }
+        return Optional.ofNullable(value).map(String::trim).filter(s -> !s.isEmpty());
     }
 
     private static String readConfig(String key) {

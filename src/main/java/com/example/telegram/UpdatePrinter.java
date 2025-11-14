@@ -1,8 +1,21 @@
 package com.example.telegram;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Chat;
@@ -34,10 +47,53 @@ import org.telegram.telegrambots.meta.api.objects.boost.ChatBoostSource;
 import org.telegram.telegrambots.meta.api.objects.boost.ChatBoostUpdated;
 
 /**
- * Converts {@link Update} objects into a concise, human readable diagnostic string so we can
- * quickly see which Telegram event(s) fired.
+ * Converts {@link Update} objects into diagnostic strings or NDJSON lines so we can quickly see
+ * which Telegram event(s) fired. Can optionally duplicate output into a log file.
  */
 public class UpdatePrinter {
+
+    public enum Format {
+        TEXT,
+        JSON;
+
+        public static Format fromString(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return TEXT;
+            }
+            String normalized = raw.trim().toLowerCase(Locale.ROOT);
+            switch (normalized) {
+                case "text":
+                    return TEXT;
+                case "json":
+                case "ndjson":
+                    return JSON;
+                default:
+                    throw new IllegalArgumentException("Unknown format: " + raw);
+            }
+        }
+    }
+
+    private final Format format;
+    private final Path logFile;
+    private final Lock fileLock = new ReentrantLock();
+    private final ObjectMapper objectMapper;
+
+    public UpdatePrinter() {
+        this(Format.TEXT, null);
+    }
+
+    public UpdatePrinter(Format format, Path logFile) {
+        this.format = format == null ? Format.TEXT : format;
+        this.logFile = logFile;
+        this.objectMapper = this.format == Format.JSON ? buildObjectMapper() : null;
+    }
+
+    private ObjectMapper buildObjectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return mapper;
+    }
 
     /**
      * Builds a multi-line description of every payload that is present in the given update.
@@ -81,10 +137,41 @@ public class UpdatePrinter {
     }
 
     /**
-     * Convenience helper that prints the formatted update to stdout.
+     * Convenience helper that prints the formatted update to stdout and optionally a file.
      */
     public void print(Update update) {
-        System.out.print(describe(update));
+        String payload = format == Format.TEXT ? describe(update) : toJson(update);
+        System.out.print(payload);
+        if (logFile != null) {
+            writeToFile(payload);
+        }
+    }
+
+    private String toJson(Update update) {
+        try {
+            return objectMapper.writeValueAsString(update) + System.lineSeparator();
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize update to JSON", e);
+        }
+    }
+
+    private void writeToFile(String payload) {
+        fileLock.lock();
+        try {
+            if (logFile.getParent() != null) {
+                Files.createDirectories(logFile.getParent());
+            }
+            Files.writeString(
+                    logFile,
+                    payload,
+                    StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to write update payload to " + logFile, e);
+        } finally {
+            fileLock.unlock();
+        }
     }
 
     private boolean appendMessage(StringBuilder sb, String label, Message message) {
