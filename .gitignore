@@ -1,0 +1,14 @@
+# Maven output
+/target/
+
+# IDEs
+/.idea/
+*.iml
+/.project
+/.classpath
+/.settings/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
